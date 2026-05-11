@@ -91,6 +91,8 @@ def test_migration_guards_workflow_organization_consistency():
     sql = MIGRATION.read_text(encoding="utf-8").lower()
     assert "create or replace function public.assert_workflow_organization_consistency()" in sql
     for table in [
+        "browser_sessions",
+        "agent_tasks",
         "task_candidates",
         "task_approvals",
         "ad_upload_batches",
@@ -98,9 +100,13 @@ def test_migration_guards_workflow_organization_consistency():
         "local_asset_candidates",
         "audit_events",
         "task_artifacts",
+        "resource_locks",
     ]:
         assert f"create trigger assert_{table}_organization" in sql
     for mismatch in [
+        "browser_sessions admin_target_id organization mismatch",
+        "agent_tasks admin_target_id organization mismatch",
+        "agent_tasks browser_session_id organization mismatch",
         "task_candidates task_id organization mismatch",
         "task_approvals task_id organization mismatch",
         "ad_upload_batches task_id organization mismatch",
@@ -110,8 +116,23 @@ def test_migration_guards_workflow_organization_consistency():
         "local_asset_candidates task_id organization mismatch",
         "audit_events task_id organization mismatch",
         "task_artifacts task_id organization mismatch",
+        "resource_locks task_id organization mismatch",
     ]:
         assert mismatch in sql
+
+
+def test_migration_validates_polymorphic_approval_subjects():
+    sql = MIGRATION.read_text(encoding="utf-8").lower()
+    for subject_type, table, alias in [
+        ("candidate", "task_candidates", "candidate"),
+        ("upload_batch", "ad_upload_batches", "batch"),
+        ("upload_item", "ad_upload_items", "item"),
+        ("local_asset", "local_asset_candidates", "asset"),
+    ]:
+        assert f"new.subject_type = '{subject_type}'" in sql
+        assert f"from public.{table} {alias}" in sql
+        assert f"task_approvals {subject_type} subject mismatch" in sql
+    assert "task_approvals task subject mismatch" in sql
 
 
 def test_seed_defines_initial_agent_permission_sets():

@@ -314,12 +314,51 @@ set search_path = public
 as $$
 declare
     task_organization_id uuid;
+    target_organization_id uuid;
+    session_organization_id uuid;
     batch_organization_id uuid;
     batch_task_id uuid;
     item_organization_id uuid;
     item_task_id uuid;
+    subject_organization_id uuid;
+    subject_task_id uuid;
 begin
-    if tg_table_name = 'task_candidates' then
+    if tg_table_name = 'browser_sessions' then
+        if new.admin_target_id is not null then
+            select target.organization_id
+              into target_organization_id
+              from public.admin_targets target
+             where target.id = new.admin_target_id;
+
+            if target_organization_id is distinct from new.organization_id then
+                raise exception 'browser_sessions admin_target_id organization mismatch';
+            end if;
+        end if;
+
+    elsif tg_table_name = 'agent_tasks' then
+        if new.admin_target_id is not null then
+            select target.organization_id
+              into target_organization_id
+              from public.admin_targets target
+             where target.id = new.admin_target_id;
+
+            if target_organization_id is distinct from new.organization_id then
+                raise exception 'agent_tasks admin_target_id organization mismatch';
+            end if;
+        end if;
+
+        if new.browser_session_id is not null then
+            select browser_session.organization_id
+              into session_organization_id
+              from public.browser_sessions browser_session
+             where browser_session.id = new.browser_session_id;
+
+            if session_organization_id is distinct from new.organization_id then
+                raise exception 'agent_tasks browser_session_id organization mismatch';
+            end if;
+        end if;
+
+    elsif tg_table_name = 'task_candidates' then
         select task.organization_id
           into task_organization_id
           from public.agent_tasks task
@@ -337,6 +376,56 @@ begin
 
         if task_organization_id is distinct from new.organization_id then
             raise exception 'task_approvals task_id organization mismatch';
+        end if;
+
+        if new.subject_type = 'task' then
+            if new.subject_id is distinct from new.task_id then
+                raise exception 'task_approvals task subject mismatch';
+            end if;
+
+        elsif new.subject_type = 'candidate' then
+            select candidate.organization_id, candidate.task_id
+              into subject_organization_id, subject_task_id
+              from public.task_candidates candidate
+             where candidate.id = new.subject_id;
+
+            if subject_organization_id is distinct from new.organization_id
+                or subject_task_id is distinct from new.task_id then
+                raise exception 'task_approvals candidate subject mismatch';
+            end if;
+
+        elsif new.subject_type = 'upload_batch' then
+            select batch.organization_id, batch.task_id
+              into subject_organization_id, subject_task_id
+              from public.ad_upload_batches batch
+             where batch.id = new.subject_id;
+
+            if subject_organization_id is distinct from new.organization_id
+                or subject_task_id is distinct from new.task_id then
+                raise exception 'task_approvals upload_batch subject mismatch';
+            end if;
+
+        elsif new.subject_type = 'upload_item' then
+            select item.organization_id, item.task_id
+              into subject_organization_id, subject_task_id
+              from public.ad_upload_items item
+             where item.id = new.subject_id;
+
+            if subject_organization_id is distinct from new.organization_id
+                or subject_task_id is distinct from new.task_id then
+                raise exception 'task_approvals upload_item subject mismatch';
+            end if;
+
+        elsif new.subject_type = 'local_asset' then
+            select asset.organization_id, asset.task_id
+              into subject_organization_id, subject_task_id
+              from public.local_asset_candidates asset
+             where asset.id = new.subject_id;
+
+            if subject_organization_id is distinct from new.organization_id
+                or subject_task_id is distinct from new.task_id then
+                raise exception 'task_approvals local_asset subject mismatch';
+            end if;
         end if;
 
     elsif tg_table_name = 'ad_upload_batches' then
@@ -418,6 +507,18 @@ begin
                 raise exception 'task_artifacts task_id organization mismatch';
             end if;
         end if;
+
+    elsif tg_table_name = 'resource_locks' then
+        if new.task_id is not null then
+            select task.organization_id
+              into task_organization_id
+              from public.agent_tasks task
+             where task.id = new.task_id;
+
+            if task_organization_id is distinct from new.organization_id then
+                raise exception 'resource_locks task_id organization mismatch';
+            end if;
+        end if;
     end if;
 
     return new;
@@ -459,6 +560,16 @@ create trigger set_ad_upload_items_updated_at
 before update on public.ad_upload_items
 for each row execute function public.set_updated_at();
 
+drop trigger if exists assert_browser_sessions_organization on public.browser_sessions;
+create trigger assert_browser_sessions_organization
+before insert or update of organization_id, admin_target_id on public.browser_sessions
+for each row execute function public.assert_workflow_organization_consistency();
+
+drop trigger if exists assert_agent_tasks_organization on public.agent_tasks;
+create trigger assert_agent_tasks_organization
+before insert or update of organization_id, admin_target_id, browser_session_id on public.agent_tasks
+for each row execute function public.assert_workflow_organization_consistency();
+
 drop trigger if exists assert_task_candidates_organization on public.task_candidates;
 create trigger assert_task_candidates_organization
 before insert or update of organization_id, task_id on public.task_candidates
@@ -466,7 +577,7 @@ for each row execute function public.assert_workflow_organization_consistency();
 
 drop trigger if exists assert_task_approvals_organization on public.task_approvals;
 create trigger assert_task_approvals_organization
-before insert or update of organization_id, task_id on public.task_approvals
+before insert or update of organization_id, task_id, subject_type, subject_id on public.task_approvals
 for each row execute function public.assert_workflow_organization_consistency();
 
 drop trigger if exists assert_ad_upload_batches_organization on public.ad_upload_batches;
@@ -492,6 +603,11 @@ for each row execute function public.assert_workflow_organization_consistency();
 drop trigger if exists assert_task_artifacts_organization on public.task_artifacts;
 create trigger assert_task_artifacts_organization
 before insert or update of organization_id, task_id on public.task_artifacts
+for each row execute function public.assert_workflow_organization_consistency();
+
+drop trigger if exists assert_resource_locks_organization on public.resource_locks;
+create trigger assert_resource_locks_organization
+before insert or update of organization_id, task_id on public.resource_locks
 for each row execute function public.assert_workflow_organization_consistency();
 
 create index if not exists idx_organization_members_user_organization
