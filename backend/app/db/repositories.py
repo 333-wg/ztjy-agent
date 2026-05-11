@@ -46,6 +46,8 @@ class ApprovalRepository(Protocol):
         task_id: str,
         approval_type: ApprovalType,
         requested_payload: dict[str, Any] | None = None,
+        subject_type: str = "task",
+        subject_id: str | None = None,
     ) -> TaskApproval: ...
 
     def get_approval(self, approval_id: str) -> TaskApproval: ...
@@ -153,12 +155,16 @@ class InMemoryApprovalRepository:
         task_id: str,
         approval_type: ApprovalType,
         requested_payload: dict[str, Any] | None = None,
+        subject_type: str = "task",
+        subject_id: str | None = None,
     ) -> TaskApproval:
         approval = TaskApproval(
             id=_new_id(),
             task_id=task_id,
             approval_type=approval_type,
-            requested_payload=requested_payload or {},
+            subject_type=subject_type,
+            subject_id=subject_id or task_id,
+            requested_payload=_copy(requested_payload or {}),
         )
         self._approvals[approval.id] = approval
         return _copy(approval)
@@ -175,7 +181,7 @@ class InMemoryApprovalRepository:
     ) -> TaskApproval:
         approval = self._approvals[approval_id]
         approval.status = status
-        approval.decision_payload = decision_payload
+        approval.decision_payload = _copy(decision_payload)
         approval.decided_by = decided_by
         approval.decided_at = utc_now()
         return _copy(approval)
@@ -186,7 +192,7 @@ class InMemoryAuditRepository:
         self._events: list[AuditEvent] = []
 
     def record_event(self, task_id: str, event_type: str, summary: str, **kwargs: Any) -> AuditEvent:
-        event = AuditEvent(id=_new_id(), task_id=task_id, event_type=event_type, summary=summary, **kwargs)
+        event = AuditEvent(id=_new_id(), task_id=task_id, event_type=event_type, summary=summary, **_copy(kwargs))
         self._events.append(event)
         return _copy(event)
 
@@ -204,7 +210,7 @@ class InMemoryCandidateRepository:
             task_id=task_id,
             candidate_type=candidate_type,
             display_name=display_name,
-            **kwargs,
+            **_copy(kwargs),
         )
         self._candidates[candidate.id] = candidate
         return _copy(candidate)
@@ -233,7 +239,7 @@ class InMemoryUploadBatchRepository:
             task_id=task_id,
             company_request=company_request,
             total_items=total_items,
-            **kwargs,
+            **_copy(kwargs),
         )
         self._batches[batch.id] = batch
         return _copy(batch)
@@ -244,7 +250,7 @@ class InMemoryUploadBatchRepository:
     def update_batch(self, batch_id: str, **changes: Any) -> UploadBatch:
         batch = self._batches[batch_id]
         for key, value in changes.items():
-            setattr(batch, key, value)
+            setattr(batch, key, _copy(value))
         batch.updated_at = utc_now()
         if batch.status in {"completed", "failed", "cancelled"}:
             batch.completed_at = batch.updated_at
@@ -271,7 +277,7 @@ class InMemoryUploadItemRepository:
             item_order=item_order,
             requested_name=requested_name,
             requested_type=requested_type,
-            **kwargs,
+            **_copy(kwargs),
         )
         self._items[item.id] = item
         return _copy(item)
@@ -286,7 +292,7 @@ class InMemoryUploadItemRepository:
     def update_item(self, item_id: str, **changes: Any) -> UploadItem:
         item = self._items[item_id]
         for key, value in changes.items():
-            setattr(item, key, value)
+            setattr(item, key, _copy(value))
         item.updated_at = utc_now()
         if item.status in {
             UploadItemStatus.SAVED,
@@ -316,7 +322,7 @@ class InMemoryLocalAssetCandidateRepository:
             upload_item_id=upload_item_id,
             file_name=file_name,
             local_path_ref=local_path_ref,
-            **kwargs,
+            **_copy(kwargs),
         )
         self._candidates[candidate.id] = candidate
         return _copy(candidate)

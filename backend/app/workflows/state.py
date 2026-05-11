@@ -37,9 +37,6 @@ class ApprovalType(StrEnum):
     LOGIN_COMPLETE = "login_complete"
     CANDIDATE_SELECTION = "candidate_selection"
     SAVE_APPROVAL = "save_approval"
-    UPLOAD_PLAN_CONFIRMATION = "upload_plan_confirmation"
-    TAG_CREATION_CONFIRMATION = "tag_creation_confirmation"
-    ITEM_SAVE_APPROVAL = "item_save_approval"
 
 
 class ApprovalStatus(StrEnum):
@@ -118,6 +115,8 @@ class TaskApproval(BaseModel):
     id: str
     task_id: str
     approval_type: ApprovalType
+    subject_type: str
+    subject_id: str
     status: ApprovalStatus = ApprovalStatus.PENDING
     requested_payload: dict[str, Any] = Field(default_factory=dict)
     decision_payload: dict[str, Any] | None = None

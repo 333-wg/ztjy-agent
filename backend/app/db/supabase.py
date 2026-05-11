@@ -20,7 +20,7 @@ class SupabaseSettings(BaseSettings):
         }
 
     def server_key(self) -> str:
-        return self.supabase_service_role_key or self.supabase_anon_key
+        return self.supabase_service_role_key
 
 
 def get_supabase_settings() -> SupabaseSettings:
