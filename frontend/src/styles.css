@@ -1,0 +1,307 @@
+:root {
+  color: #18201d;
+  background: #eef1ea;
+  font-family: "Aptos", "Segoe UI", sans-serif;
+  font-size: 15px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background:
+    linear-gradient(90deg, rgba(16, 71, 64, 0.08) 1px, transparent 1px),
+    linear-gradient(rgba(16, 71, 64, 0.08) 1px, transparent 1px),
+    #eef1ea;
+  background-size: 34px 34px;
+}
+
+button,
+textarea {
+  font: inherit;
+}
+
+button {
+  border: 1px solid #18201d;
+  background: #dce84c;
+  color: #111511;
+  min-height: 40px;
+  border-radius: 6px;
+  padding: 0 14px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.secondary {
+  background: #f3f0e7;
+}
+
+.console-shell {
+  width: min(1440px, 100%);
+  margin: 0 auto;
+  padding: 28px;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 16px;
+  padding-bottom: 24px;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: clamp(28px, 4vw, 52px);
+  letter-spacing: 0;
+}
+
+h2 {
+  font-size: 16px;
+}
+
+.eyebrow,
+.env {
+  color: #3c5f56;
+  font-weight: 800;
+  text-transform: uppercase;
+  font-size: 12px;
+}
+
+.env {
+  border: 1px solid #3c5f56;
+  border-radius: 999px;
+  padding: 7px 10px;
+  white-space: nowrap;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 390px) 1fr;
+  gap: 16px;
+}
+
+aside,
+.workspace {
+  display: grid;
+  gap: 16px;
+  align-content: start;
+}
+
+.workspace {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.command-panel,
+.panel,
+.error {
+  background: rgba(250, 250, 244, 0.94);
+  border: 1px solid #18201d;
+  border-radius: 8px;
+  box-shadow: 5px 5px 0 #18201d;
+}
+
+.command-panel {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+label {
+  font-weight: 800;
+}
+
+textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid #6a7369;
+  border-radius: 6px;
+  padding: 12px;
+  background: #ffffff;
+  color: #18201d;
+}
+
+.panel {
+  min-width: 0;
+  padding: 14px;
+}
+
+.timeline,
+.approvals {
+  grid-column: span 1;
+}
+
+.panel-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid #c6ccbf;
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+}
+
+.status,
+.pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: #cfe9e2;
+  color: #123c35;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.task-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 0 14px;
+}
+
+.task-meta div {
+  border: 1px solid #d6dbd0;
+  border-radius: 6px;
+  padding: 8px;
+}
+
+dt {
+  color: #667069;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+dd {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.events {
+  display: grid;
+  gap: 8px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.events li,
+.approval,
+.candidate {
+  border: 1px solid #d6dbd0;
+  border-radius: 6px;
+  background: #fffef8;
+}
+
+.events li {
+  padding: 10px;
+}
+
+.events span {
+  font-size: 12px;
+  font-weight: 800;
+  color: #3c5f56;
+}
+
+.approval {
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.approval div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+pre {
+  max-height: 150px;
+  overflow: auto;
+  margin: 0;
+  padding: 10px;
+  background: #17211e;
+  color: #dce84c;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+.candidate-list {
+  display: grid;
+  gap: 8px;
+}
+
+.candidate {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  background: #fffef8;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+th,
+td {
+  text-align: left;
+  border-bottom: 1px solid #d6dbd0;
+  padding: 9px 7px;
+  overflow-wrap: anywhere;
+}
+
+.empty {
+  color: #667069;
+}
+
+.error {
+  color: #7b2020;
+  padding: 12px;
+  background: #ffe9df;
+}
+
+@media (max-width: 980px) {
+  .layout,
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .console-shell {
+    padding: 16px;
+  }
+
+  header {
+    align-items: start;
+    flex-direction: column;
+  }
+
+  .task-meta {
+    grid-template-columns: 1fr;
+  }
+}
