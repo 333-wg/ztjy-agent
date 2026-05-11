@@ -133,6 +133,7 @@ create table if not exists public.agent_tasks (
 
 create table if not exists public.task_candidates (
     id uuid primary key default gen_random_uuid(),
+    organization_id uuid not null references public.organizations(id) on delete cascade,
     task_id uuid not null references public.agent_tasks(id) on delete cascade,
     candidate_type text not null check (candidate_type in ('device', 'advertisement', 'company', 'tag')),
     external_ref text,
@@ -234,12 +235,13 @@ create table if not exists public.local_asset_candidates (
 
 create table if not exists public.task_approvals (
     id uuid primary key default gen_random_uuid(),
+    organization_id uuid not null references public.organizations(id) on delete cascade,
     task_id uuid not null references public.agent_tasks(id) on delete cascade,
     approval_type text not null
         check (approval_type in ('command_confirmation', 'login_complete', 'candidate_selection', 'save_approval')),
-    subject_type text
+    subject_type text not null
         check (subject_type in ('task', 'candidate', 'upload_batch', 'upload_item', 'local_asset')),
-    subject_id uuid,
+    subject_id uuid not null,
     status text not null default 'pending'
         check (status in ('pending', 'approved', 'rejected', 'expired')),
     requested_payload jsonb not null default '{}'::jsonb,
@@ -247,7 +249,8 @@ create table if not exists public.task_approvals (
     requested_at timestamptz not null default now(),
     decided_at timestamptz,
     decided_by uuid references auth.users(id) on delete set null,
-    expires_at timestamptz
+    expires_at timestamptz,
+    check (subject_type <> 'task' or subject_id = task_id)
 );
 
 create table if not exists public.audit_events (
@@ -304,6 +307,123 @@ begin
 end;
 $$;
 
+create or replace function public.assert_workflow_organization_consistency()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+declare
+    task_organization_id uuid;
+    batch_organization_id uuid;
+    batch_task_id uuid;
+    item_organization_id uuid;
+    item_task_id uuid;
+begin
+    if tg_table_name = 'task_candidates' then
+        select task.organization_id
+          into task_organization_id
+          from public.agent_tasks task
+         where task.id = new.task_id;
+
+        if task_organization_id is distinct from new.organization_id then
+            raise exception 'task_candidates task_id organization mismatch';
+        end if;
+
+    elsif tg_table_name = 'task_approvals' then
+        select task.organization_id
+          into task_organization_id
+          from public.agent_tasks task
+         where task.id = new.task_id;
+
+        if task_organization_id is distinct from new.organization_id then
+            raise exception 'task_approvals task_id organization mismatch';
+        end if;
+
+    elsif tg_table_name = 'ad_upload_batches' then
+        select task.organization_id
+          into task_organization_id
+          from public.agent_tasks task
+         where task.id = new.task_id;
+
+        if task_organization_id is distinct from new.organization_id then
+            raise exception 'ad_upload_batches task_id organization mismatch';
+        end if;
+
+    elsif tg_table_name = 'ad_upload_items' then
+        select task.organization_id
+          into task_organization_id
+          from public.agent_tasks task
+         where task.id = new.task_id;
+
+        if task_organization_id is distinct from new.organization_id then
+            raise exception 'ad_upload_items task_id organization mismatch';
+        end if;
+
+        select batch.organization_id, batch.task_id
+          into batch_organization_id, batch_task_id
+          from public.ad_upload_batches batch
+         where batch.id = new.batch_id;
+
+        if batch_organization_id is distinct from new.organization_id then
+            raise exception 'ad_upload_items batch_id organization mismatch';
+        end if;
+
+        if batch_task_id is distinct from new.task_id then
+            raise exception 'ad_upload_items batch_id task mismatch';
+        end if;
+
+    elsif tg_table_name = 'local_asset_candidates' then
+        select task.organization_id
+          into task_organization_id
+          from public.agent_tasks task
+         where task.id = new.task_id;
+
+        if task_organization_id is distinct from new.organization_id then
+            raise exception 'local_asset_candidates task_id organization mismatch';
+        end if;
+
+        select item.organization_id, item.task_id
+          into item_organization_id, item_task_id
+          from public.ad_upload_items item
+         where item.id = new.upload_item_id;
+
+        if item_organization_id is distinct from new.organization_id then
+            raise exception 'local_asset_candidates upload_item_id organization mismatch';
+        end if;
+
+        if item_task_id is distinct from new.task_id then
+            raise exception 'local_asset_candidates upload_item_id task mismatch';
+        end if;
+
+    elsif tg_table_name = 'audit_events' then
+        if new.task_id is not null then
+            select task.organization_id
+              into task_organization_id
+              from public.agent_tasks task
+             where task.id = new.task_id;
+
+            if task_organization_id is distinct from new.organization_id then
+                raise exception 'audit_events task_id organization mismatch';
+            end if;
+        end if;
+
+    elsif tg_table_name = 'task_artifacts' then
+        if new.task_id is not null then
+            select task.organization_id
+              into task_organization_id
+              from public.agent_tasks task
+             where task.id = new.task_id;
+
+            if task_organization_id is distinct from new.organization_id then
+                raise exception 'task_artifacts task_id organization mismatch';
+            end if;
+        end if;
+    end if;
+
+    return new;
+end;
+$$;
+
 drop trigger if exists set_organizations_updated_at on public.organizations;
 create trigger set_organizations_updated_at
 before update on public.organizations
@@ -338,6 +458,41 @@ drop trigger if exists set_ad_upload_items_updated_at on public.ad_upload_items;
 create trigger set_ad_upload_items_updated_at
 before update on public.ad_upload_items
 for each row execute function public.set_updated_at();
+
+drop trigger if exists assert_task_candidates_organization on public.task_candidates;
+create trigger assert_task_candidates_organization
+before insert or update of organization_id, task_id on public.task_candidates
+for each row execute function public.assert_workflow_organization_consistency();
+
+drop trigger if exists assert_task_approvals_organization on public.task_approvals;
+create trigger assert_task_approvals_organization
+before insert or update of organization_id, task_id on public.task_approvals
+for each row execute function public.assert_workflow_organization_consistency();
+
+drop trigger if exists assert_ad_upload_batches_organization on public.ad_upload_batches;
+create trigger assert_ad_upload_batches_organization
+before insert or update of organization_id, task_id on public.ad_upload_batches
+for each row execute function public.assert_workflow_organization_consistency();
+
+drop trigger if exists assert_ad_upload_items_organization on public.ad_upload_items;
+create trigger assert_ad_upload_items_organization
+before insert or update of organization_id, batch_id, task_id on public.ad_upload_items
+for each row execute function public.assert_workflow_organization_consistency();
+
+drop trigger if exists assert_local_asset_candidates_organization on public.local_asset_candidates;
+create trigger assert_local_asset_candidates_organization
+before insert or update of organization_id, task_id, upload_item_id on public.local_asset_candidates
+for each row execute function public.assert_workflow_organization_consistency();
+
+drop trigger if exists assert_audit_events_organization on public.audit_events;
+create trigger assert_audit_events_organization
+before insert or update of organization_id, task_id on public.audit_events
+for each row execute function public.assert_workflow_organization_consistency();
+
+drop trigger if exists assert_task_artifacts_organization on public.task_artifacts;
+create trigger assert_task_artifacts_organization
+before insert or update of organization_id, task_id on public.task_artifacts
+for each row execute function public.assert_workflow_organization_consistency();
 
 create index if not exists idx_organization_members_user_organization
     on public.organization_members (user_id, organization_id);
@@ -425,7 +580,7 @@ alter table public.task_artifacts enable row level security;
 alter table public.resource_locks enable row level security;
 
 comment on table public.agent_tasks is
-    'Workflow writes are performed by backend service role after app-level authorization. Browser clients may read organization-scoped rows and create tasks, but cannot directly mutate workflow state.';
+    'Workflow writes are performed by backend service role after app-level authorization. Tasks are created by backend service role after app-level authorization. Browser clients may read organization-scoped rows but cannot directly create or mutate workflow state.';
 comment on table public.task_candidates is
     'Workflow writes are performed by backend service role after app-level authorization. Browser clients read candidates but do not directly change selection state.';
 comment on table public.local_asset_candidates is
@@ -503,13 +658,6 @@ to authenticated
 using (public.is_organization_member(organization_id));
 
 drop policy if exists "operators can create agent tasks" on public.agent_tasks;
-create policy "operators can create agent tasks"
-on public.agent_tasks for insert
-to authenticated
-with check (
-    created_by = auth.uid()
-    and public.has_organization_role(organization_id, array['owner', 'operator'])
-);
 
 drop policy if exists "operators can update agent tasks" on public.agent_tasks;
 

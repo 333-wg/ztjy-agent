@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -10,6 +11,12 @@ def _seed_block(sql: str, agent_key: str, next_marker: str) -> str:
     start = permission_sets.index(f"'{agent_key}',")
     end = permission_sets.index(next_marker, start)
     return permission_sets[start:end]
+
+
+def _table_block(sql: str, table: str) -> str:
+    start = sql.index(f"create table if not exists public.{table}")
+    end = sql.index("\n);", start)
+    return sql[start:end]
 
 
 def test_migration_defines_core_tables():
@@ -50,21 +57,61 @@ def test_migration_defines_recommended_indexes():
 
 def test_migration_scopes_task_approvals_to_subjects():
     sql = MIGRATION.read_text(encoding="utf-8").lower()
-    assert "subject_type text" in sql
-    assert "subject_id uuid" in sql
+    approvals = _table_block(sql, "task_approvals")
+    candidates = _table_block(sql, "task_candidates")
+    assert "organization_id uuid not null" in candidates
+    assert "organization_id uuid not null" in approvals
+    assert "subject_type text not null" in approvals
+    assert "subject_id uuid not null" in approvals
+    assert "check (subject_type <> 'task' or subject_id = task_id)" in approvals
     assert "on public.task_approvals (task_id, subject_type, subject_id)" in sql
 
 
-def test_migration_keeps_workflow_updates_backend_only():
+def test_migration_keeps_workflow_writes_backend_only():
     sql = MIGRATION.read_text(encoding="utf-8").lower()
     for table in [
         "agent_tasks",
         "task_candidates",
+        "ad_upload_batches",
+        "ad_upload_items",
         "local_asset_candidates",
         "task_approvals",
+        "audit_events",
+        "task_artifacts",
     ]:
-        assert f"on public.{table} for update" not in sql
+        assert not re.search(
+            rf"on\s+public\.{table}\s+for\s+(insert|update|delete|all)\s+to\s+authenticated",
+            sql,
+        )
     assert "workflow writes are performed by backend service role" in sql
+    assert "tasks are created by backend service role" in sql
+
+
+def test_migration_guards_workflow_organization_consistency():
+    sql = MIGRATION.read_text(encoding="utf-8").lower()
+    assert "create or replace function public.assert_workflow_organization_consistency()" in sql
+    for table in [
+        "task_candidates",
+        "task_approvals",
+        "ad_upload_batches",
+        "ad_upload_items",
+        "local_asset_candidates",
+        "audit_events",
+        "task_artifacts",
+    ]:
+        assert f"create trigger assert_{table}_organization" in sql
+    for mismatch in [
+        "task_candidates task_id organization mismatch",
+        "task_approvals task_id organization mismatch",
+        "ad_upload_batches task_id organization mismatch",
+        "ad_upload_items batch_id organization mismatch",
+        "ad_upload_items task_id organization mismatch",
+        "local_asset_candidates upload_item_id organization mismatch",
+        "local_asset_candidates task_id organization mismatch",
+        "audit_events task_id organization mismatch",
+        "task_artifacts task_id organization mismatch",
+    ]:
+        assert mismatch in sql
 
 
 def test_seed_defines_initial_agent_permission_sets():
