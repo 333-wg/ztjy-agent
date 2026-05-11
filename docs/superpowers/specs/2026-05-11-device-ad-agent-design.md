@@ -1,8 +1,8 @@
-# Device Advertisement Agent Design
+# Advertisement Agent System Design
 
 ## Summary
 
-Build a local, controlled agent system for operating the company's management backend through a browser. The first milestone implements one workflow: bind existing advertisements from the backend's advertisement library to a specified device.
+Build a local, controlled agent system for operating the company's management backend through a browser. The system starts with two related but separate workflows: bind existing advertisements from the backend's advertisement library to a specified device, and create missing image or video advertisements in advertisement management.
 
 The system will use a local Web console, Python FastAPI backend, LangGraph workflow orchestration, Playwright for browser automation, and Supabase for persistent task state, approvals, audit records, and optional artifacts. The first implementation will support a mock backend adapter while preserving the same interface expected for the real management system.
 
@@ -17,6 +17,8 @@ The agent must not freely operate the backend. It can only call explicitly white
 - If not logged in, stop and ask the owner to log in manually.
 - Search the device list by device number.
 - Bind advertisements that already exist in advertisement management.
+- Create missing advertisements through a separate Advertisement Upload Agent when the owner explicitly asks for it.
+- Support owner commands that contain multiple advertisement upload requests, while executing them one item at a time.
 - Stop and report when a device or advertisement cannot be uniquely identified.
 - Require owner approval before saving.
 - Record key audit events for traceability.
@@ -24,11 +26,12 @@ The agent must not freely operate the backend. It can only call explicitly white
 
 ## Non-Goals
 
-- The first version will not create or upload new advertisements.
+- The Device Advertisement Agent will not create or upload new advertisements.
+- The Advertisement Upload Agent will not bind advertisements to devices.
 - The first version will not store or read backend usernames or passwords.
 - The first version will not modify device information.
 - The first version will not delete devices, delete advertisements, or change system configuration.
-- The first version will not automatically hand off to another agent when an advertisement is missing.
+- The first version will not automatically hand off to another agent when an advertisement is missing; the owner must explicitly confirm any handoff.
 - The first version will not rely on the LLM to perform arbitrary browser clicks.
 
 ## First Workflow
@@ -154,7 +157,7 @@ Permissions must be data-driven and versioned so every task can be tied to the e
 - `agent_definitions`
   - Registered business agents.
   - Fields: `agent_key`, `name`, `description`, `status`, `created_at`.
-  - Initial row: `device_ad_agent`.
+  - Initial rows: `device_ad_agent`, `ad_upload_agent`.
 
 - `agent_permission_sets`
   - Versioned whitelist and denylist for each agent.
@@ -177,6 +180,25 @@ Initial `device_ad_agent` allowed actions:
 - `read_pending_ads`
 - `save_after_owner_approval`
 - `read_save_result`
+
+Initial `ad_upload_agent` allowed actions:
+
+- `check_login`
+- `open_management_backend`
+- `open_ad_management`
+- `search_company`
+- `select_owner_approved_company`
+- `search_tag`
+- `select_owner_approved_tag`
+- `create_tag_after_owner_approval`
+- `search_local_assets`
+- `open_ad_create_form`
+- `select_ad_type`
+- `fill_ad_metadata`
+- `upload_local_asset`
+- `read_ad_preview`
+- `save_ad_after_owner_approval`
+- `read_saved_ad_result`
 
 ### Backend Target And Browser Session Tables
 
@@ -234,6 +256,13 @@ Task statuses:
 - `awaiting_candidate_selection`
 - `awaiting_save_approval`
 - `awaiting_correction_decision`
+- `awaiting_upload_plan_confirmation`
+- `awaiting_company_selection`
+- `awaiting_tag_selection`
+- `awaiting_tag_creation_confirmation`
+- `awaiting_asset_selection`
+- `uploading_asset`
+- `awaiting_item_save_approval`
 - `saving`
 - `succeeded`
 - `failed`
@@ -262,7 +291,82 @@ Allowed advertisement types are `image`, `video`, and `unknown`. The parser shou
 - `task_candidates`
   - Candidate objects shown to the owner when a device or advertisement search is ambiguous.
   - Fields: `id`, `task_id`, `candidate_type`, `external_ref`, `display_name`, `ad_type`, `category`, `metadata`, `selection_status`, `created_at`, `selected_at`, `selected_by`.
-  - Candidate types: `device`, `advertisement`.
+  - Candidate types: `device`, `advertisement`, `company`, `tag`.
+
+- `ad_upload_batches`
+  - One owner command can create one upload batch with multiple advertisement items.
+  - Fields:
+    - `id`
+    - `organization_id`
+    - `task_id`
+    - `created_by`
+    - `company_request`
+    - `matched_company`
+    - `tag_request`
+    - `matched_tag`
+    - `created_tag`
+    - `status`
+    - `total_items`
+    - `completed_items`
+    - `failed_items`
+    - `skipped_items`
+    - `created_at`
+    - `updated_at`
+    - `completed_at`
+
+Upload batch statuses:
+
+- `draft`
+- `awaiting_upload_plan_confirmation`
+- `resolving_company`
+- `resolving_tag`
+- `awaiting_tag_creation_confirmation`
+- `running`
+- `completed`
+- `failed`
+- `cancelled`
+
+- `ad_upload_items`
+  - One advertisement creation request inside an upload batch.
+  - Fields:
+    - `id`
+    - `organization_id`
+    - `batch_id`
+    - `task_id`
+    - `item_order`
+    - `requested_name`
+    - `requested_type`
+    - `requested_category`
+    - `local_asset_query`
+    - `selected_asset_path`
+    - `selected_asset_metadata`
+    - `form_payload`
+    - `preview_payload`
+    - `saved_ad`
+    - `status`
+    - `error_code`
+    - `error_message`
+    - `created_at`
+    - `updated_at`
+    - `completed_at`
+
+Upload item statuses:
+
+- `pending`
+- `asset_candidates_found`
+- `awaiting_asset_selection`
+- `ready_to_upload`
+- `uploading`
+- `awaiting_item_save_approval`
+- `saved`
+- `failed`
+- `skipped`
+- `cancelled`
+
+- `local_asset_candidates`
+  - Candidate local files found for one upload item.
+  - Fields: `id`, `organization_id`, `task_id`, `upload_item_id`, `file_name`, `local_path_ref`, `media_type`, `metadata`, `selection_status`, `created_at`, `selected_at`, `selected_by`.
+  - `local_path_ref` is a local path or path alias. Supabase should not store the file contents unless artifacts are explicitly enabled.
 
 - `task_approvals`
   - Human-in-the-loop approval records.
@@ -360,6 +464,11 @@ Recommended initial indexes:
 - `task_candidates(task_id, candidate_type)`
 - `task_candidates(task_id, candidate_type, ad_type)`
 - `task_candidates(task_id, candidate_type, category)`
+- `ad_upload_batches(organization_id, status, created_at desc)`
+- `ad_upload_batches(task_id)`
+- `ad_upload_items(batch_id, item_order)`
+- `ad_upload_items(batch_id, status)`
+- `local_asset_candidates(upload_item_id, selection_status)`
 - `audit_events(organization_id, task_id, created_at desc)`
 - `audit_events(organization_id, created_at desc)`
 - `resource_locks(lock_key, locked_until)`
@@ -389,6 +498,9 @@ Initial Realtime tables:
 - `agent_tasks`
 - `task_approvals`
 - `task_candidates`
+- `ad_upload_batches`
+- `ad_upload_items`
+- `local_asset_candidates`
 - `audit_events`
 
 Realtime payloads should stay small. Large screenshots, full DOM dumps, Playwright traces, and raw page HTML should be stored as artifacts or local files, not streamed through Realtime.
@@ -412,24 +524,37 @@ The first version includes these roles:
   - Parses the user's command.
   - Determines the target business workflow.
   - Checks whether the requested action is in scope.
+  - Routes advertisement creation commands to the Advertisement Upload Agent.
+  - Routes device binding commands to the Device Advertisement Agent.
+  - Splits mixed commands into explicit phases that require owner confirmation before handoff.
 
 - Device Advertisement Agent
   - Handles only device advertisement binding.
   - Uses only device-advertisement tools.
   - Cannot upload advertisements, delete data, or modify device profile fields.
 
-Future agents can be added later:
-
 - Advertisement Upload Agent
-  - Uploads image or video advertisements.
-  - Fills advertisement metadata.
-  - Requires its own permission whitelist and confirmation gates.
+  - Handles only advertisement creation in advertisement management.
+  - Supports image and video advertisements.
+  - Selects the owner-confirmed company.
+  - Selects the owner-confirmed tag or creates a missing tag after owner approval.
+  - Searches local storage for owner-described image or video assets.
+  - Uploads and saves advertisements one item at a time.
+  - Cannot bind advertisements to devices, delete advertisements, overwrite existing advertisements, or modify company settings.
+
+Future agents can be added later:
 
 - Device Management Agent
   - Handles device status queries first.
   - Any modification workflow must be separately designed and guarded.
 
-Cross-agent handoff must be explicit. For example, if an advertisement does not exist, the Device Advertisement Agent stops and reports the missing advertisement. It must not automatically start the Advertisement Upload Agent.
+Cross-agent handoff must be explicit. For example, if an advertisement does not exist, the Device Advertisement Agent stops and reports the missing advertisement. It must not automatically start the Advertisement Upload Agent. If the owner confirms an upload handoff, the Advertisement Upload Agent creates the missing advertisements first, then the owner can confirm whether to return to the Device Advertisement Agent for device binding.
+
+Routing examples:
+
+- "给设备 10086 添加五一广告" routes to `device_ad_agent`.
+- "给企业 A 的春节标签上传 3 个视频广告和 2 个图片广告" routes to `ad_upload_agent`.
+- "上传五一广告并绑定到设备 10086" becomes a two-phase plan: upload advertisements first, then request owner confirmation before device binding.
 
 ## Device Advertisement Workflow
 
@@ -478,9 +603,9 @@ The pre-save report must show:
 - Any correction actions taken on this task's unsaved additions.
 - Confirmation that no baseline advertisement was removed or modified.
 
-## Allowed Actions
+## Device Advertisement Allowed Actions
 
-The first version allows only these actions:
+The Device Advertisement Agent allows only these actions:
 
 - Check login status.
 - Open the management backend URL.
@@ -494,9 +619,9 @@ The first version allows only these actions:
 - Save after owner approval.
 - Read and report the save result.
 
-## Blocked Actions
+## Device Advertisement Blocked Actions
 
-The first version must block these actions:
+The Device Advertisement Agent must block these actions:
 
 - Create advertisements.
 - Upload advertisement images or videos.
@@ -509,6 +634,41 @@ The first version must block these actions:
 - Perform batch operations outside the confirmed device.
 - Save before owner approval.
 - Continue when the page structure, button meaning, or target object is uncertain.
+- Use backend credentials stored in configuration.
+
+## Advertisement Upload Allowed Actions
+
+The Advertisement Upload Agent allows only these actions:
+
+- Check login status.
+- Open the management backend URL.
+- Open advertisement management.
+- Search and select the owner-confirmed company.
+- Search and select the owner-confirmed tag.
+- Create a missing tag only after owner approval.
+- Search local storage for image or video assets.
+- Ask the owner to choose when local asset search finds multiple candidates.
+- Open the advertisement creation form.
+- Select advertisement type: image or video.
+- Fill owner-confirmed advertisement metadata.
+- Upload the selected local asset.
+- Read the upload result and advertisement preview.
+- Save one advertisement item after owner approval.
+- Read and report the saved advertisement result.
+
+## Advertisement Upload Blocked Actions
+
+The Advertisement Upload Agent must block these actions:
+
+- Bind advertisements to devices.
+- Delete advertisements.
+- Overwrite or edit existing advertisements unless a separate edit workflow is approved.
+- Create a tag without owner approval.
+- Create or modify companies.
+- Upload a local file when the asset match is missing or ambiguous.
+- Upload a file whose detected media type conflicts with the requested advertisement type.
+- Save multiple advertisement items with one approval.
+- Continue when the page structure, button meaning, upload state, preview, or target object is uncertain.
 - Use backend credentials stored in configuration.
 
 ## Matching Rules
@@ -531,6 +691,128 @@ Advertisement matching:
 - Candidate reports should include available identifying fields, such as name, type, category, ID, status, and effective time, when the backend exposes them.
 - Multi-select is allowed only after the final candidate set is known. The agent must not use "select all" unless every visible selected item exactly matches the owner-confirmed requested advertisement set.
 - After multi-select, the agent must read the pending list and compare it with the requested advertisement set before asking for save approval.
+
+## Advertisement Upload Workflow
+
+The Advertisement Upload Agent handles owner-approved advertisement creation in advertisement management. It is separate from the Device Advertisement Agent and cannot bind advertisements to devices.
+
+The owner may provide one command that describes multiple advertisements. The system should parse that command into one upload batch with multiple upload items. Execution is sequential: only one upload item may be active in the browser at a time.
+
+Example command:
+
+```text
+给企业 A 的春节活动标签添加 2 个视频广告和 3 个图片广告，素材在本地广告目录，文件名分别是 a.mp4、b.mp4、c.jpg、d.jpg、e.jpg。
+```
+
+The system should parse this as:
+
+- Company request: `企业 A`
+- Tag request: `春节活动`
+- Upload items:
+  - Item 1: video advertisement, asset query `a.mp4`
+  - Item 2: video advertisement, asset query `b.mp4`
+  - Item 3: image advertisement, asset query `c.jpg`
+  - Item 4: image advertisement, asset query `d.jpg`
+  - Item 5: image advertisement, asset query `e.jpg`
+
+Workflow states:
+
+1. Receive natural language command.
+2. Parse company, tag, advertisement items, media types, asset hints, and metadata.
+3. Generate an upload plan and ask the owner to confirm it.
+4. Check backend login state.
+5. If not logged in, ask the owner to log in manually and pause.
+6. Open advertisement management.
+7. Search for the company and require exactly one owner-approved match.
+8. Search for the tag under the selected company.
+9. If the tag exists uniquely, select it.
+10. If the tag is missing, ask the owner to confirm tag creation before creating it.
+11. If multiple tags match, list candidates and ask the owner to choose.
+12. For each upload item, process it alone from asset search through save result.
+13. After all items are saved, skipped, failed, or cancelled, generate a batch summary.
+14. If this upload was started from a missing-ad handoff, ask the owner whether to return to device binding.
+
+## Advertisement Upload Sequential Execution
+
+Batch input is allowed, but batch browser execution is not. The agent must process upload items one at a time.
+
+For each upload item:
+
+1. Search local storage using the owner-provided file name, keyword, or asset hint.
+2. If no local asset is found, mark the item as failed or ask the owner for a new asset hint.
+3. If multiple local assets match, list candidates and ask the owner to choose.
+4. Verify that the selected file type matches the requested advertisement type.
+5. Open a fresh advertisement creation form.
+6. Select image or video advertisement type.
+7. Fill company, tag, advertisement name, category, and other owner-confirmed metadata.
+8. Upload the selected local file.
+9. Wait for upload completion.
+10. Read the preview or uploaded-file result from the page.
+11. Generate an item pre-save report.
+12. Save only after owner approval for that item.
+13. Read the saved advertisement result and record the new advertisement ID or backend reference.
+14. Move to the next item.
+
+Owner decisions after an item failure:
+
+- Retry the current item.
+- Change the local asset selection.
+- Skip the current item and continue the batch.
+- Cancel all remaining items.
+- Take over manually.
+
+The owner can confirm the overall upload plan once, but final save approval is per item. One item approval never grants permission to save another item.
+
+## Company And Tag Rules
+
+Company matching:
+
+- The company must be provided by the owner or selected from a candidate list.
+- Company search must produce exactly one confirmed company before upload continues.
+- The agent must not create companies or modify company information.
+
+Tag matching and creation:
+
+- Tags are scoped to the selected company.
+- If the tag exists uniquely, the agent may select it.
+- If multiple tags match, the agent must ask the owner to choose.
+- If the tag does not exist, the agent may create it only after the owner confirms the exact tag name and company.
+- Tag creation must produce its own audit event.
+- After creating a tag, the agent must read the page result and verify that the created tag matches the owner-confirmed tag.
+
+## Local Asset Rules
+
+The Advertisement Upload Agent uploads files from local storage through the browser.
+
+Local asset search rules:
+
+- The owner should provide file names, keywords, or a configured local asset directory.
+- The agent must not upload a file unless it has a unique confirmed local asset match.
+- If multiple local files match, the agent asks the owner to choose.
+- The agent must verify media type by file extension and, where practical, file metadata.
+- Supported image extensions should be configured, for example `.jpg`, `.jpeg`, `.png`, `.webp`.
+- Supported video extensions should be configured, for example `.mp4`, `.mov`, `.webm`.
+- If file size, duration, or format requirements are known, the agent should validate them before upload.
+- The agent stores local path references and metadata in the task database, not the file contents.
+
+## Advertisement Upload Approval Gate
+
+Before saving each advertisement item, the agent must produce an item pre-save report containing:
+
+- Original owner command.
+- Batch ID and item order.
+- Matched company.
+- Matched or created tag.
+- Advertisement name.
+- Advertisement type: image or video.
+- Category and metadata fields.
+- Selected local asset path or path alias.
+- Asset metadata, such as file name, extension, size, and detected media type.
+- Upload completion evidence read from the page.
+- Page preview or uploaded-file summary.
+- Statement that the agent did not bind this advertisement to devices, delete data, overwrite existing advertisements, or modify company information.
+
+The item save button is enabled only after owner approval for that specific item.
 
 ## Login Handling
 
@@ -609,6 +891,15 @@ The first version records key step-level audit events:
 - Current task additions recorded.
 - Candidate selection requested or completed.
 - Pre-save verification generated.
+- Upload plan generated.
+- Company search completed.
+- Tag search completed.
+- Tag creation requested, approved, or completed.
+- Local asset search completed.
+- Upload item started.
+- Upload item preview generated.
+- Upload item approved, rejected, saved, failed, skipped, or cancelled.
+- Upload batch summary generated.
 - Owner approved or rejected save.
 - Save attempted.
 - Final result reported.
@@ -634,12 +925,17 @@ ztjy-agent/
       agents/
         router.py
         device_ad_agent.py
+        ad_upload_agent.py
       workflows/
         device_ad_graph.py
+        ad_upload_graph.py
       browser/
         adapters.py
         mock_admin.py
         playwright_admin.py
+      assets/
+        local_search.py
+        media_validation.py
       safety/
         permissions.py
         approvals.py
@@ -668,7 +964,7 @@ ztjy-agent/
 
 The first build should use a mock adapter to validate the workflow, permissions, approval gates, and audit logging before connecting to the real backend.
 
-The browser adapter interface should be designed to match real backend operations:
+The device advertisement browser adapter interface should be designed to match real backend operations:
 
 - `check_login()`
 - `open_device_management()`
@@ -680,6 +976,29 @@ The browser adapter interface should be designed to match real backend operation
 - `read_pending_ads()`
 - `save_after_approval()`
 - `read_save_result()`
+
+The advertisement upload browser adapter interface should be designed to match real backend operations:
+
+- `check_login()`
+- `open_ad_management()`
+- `search_company(company_name)`
+- `select_company(company_id)`
+- `search_tag(company_id, tag_name)`
+- `select_tag(tag_id)`
+- `create_tag_after_approval(company_id, tag_name)`
+- `open_ad_create_form()`
+- `select_ad_type(ad_type)`
+- `fill_ad_metadata(payload)`
+- `upload_local_asset(local_path)`
+- `read_ad_preview()`
+- `save_ad_after_approval()`
+- `read_saved_ad_result()`
+
+Local asset services should be separate from the browser adapter:
+
+- `search_local_assets(query, media_type=None, base_dirs=None)`
+- `inspect_local_asset(local_path)`
+- `validate_asset_for_ad_type(local_path, ad_type)`
 
 The mock adapter and real Playwright adapter should implement the same interface so the workflow does not need to change when real backend access is added.
 
@@ -698,6 +1017,7 @@ Server-only Supabase keys must never be sent to the frontend or stored in client
 The first implementation should include tests for:
 
 - Natural language command parsing.
+- Task Router Agent routes device binding, advertisement upload, and mixed commands correctly.
 - Permission whitelist enforcement.
 - Device not found.
 - Multiple devices found.
@@ -714,6 +1034,17 @@ The first implementation should include tests for:
 - Save remains blocked after correction until the owner approves the new pre-save report.
 - Save blocked before owner approval.
 - Successful happy path with mock adapter.
+- Advertisement upload plan parsing with multiple image and video items.
+- Upload batch executes items sequentially with only one active browser item at a time.
+- Company not found and multiple-company candidate handling.
+- Tag not found triggers tag creation approval.
+- Tag creation is blocked before owner approval.
+- Multiple tag candidates require owner selection.
+- Local asset not found and multiple-local-asset candidate handling.
+- Media type mismatch blocks upload.
+- Upload item save is blocked before item-level owner approval.
+- Failed upload item can be retried, skipped, or used to cancel the remaining batch.
+- Advertisement Upload Agent cannot bind advertisements to devices.
 - Audit events written for key steps.
 - Supabase task persistence across backend restart.
 - RLS policies preventing cross-organization reads.
@@ -731,6 +1062,13 @@ These details are intentionally deferred until real backend integration:
 - Backend advertisement category taxonomy.
 - Backend advertisement search fields and filter behavior.
 - Whether multi-select adds selected advertisements incrementally or replaces the current list.
+- Test company names.
+- Test tag names and tag creation behavior.
+- Local advertisement asset directories.
+- Supported image formats, size limits, and dimension requirements.
+- Supported video formats, size limits, duration limits, and codec requirements.
+- Required advertisement creation form fields.
+- Whether advertisement save creates drafts, publishes immediately, or uses another backend state.
 - Actual menu paths and page selectors.
 - Whether the backend has a staging environment.
 - Fields available in device and advertisement search results.
