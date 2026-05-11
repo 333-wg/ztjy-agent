@@ -217,6 +217,7 @@ Task statuses:
 - `running`
 - `awaiting_candidate_selection`
 - `awaiting_save_approval`
+- `awaiting_correction_decision`
 - `saving`
 - `succeeded`
 - `failed`
@@ -490,6 +491,39 @@ Before final save, the agent must produce a pre-save verification report contain
 
 The save button in the workflow is enabled only after the owner approves this report.
 
+## Pre-Save Correction Flow
+
+If the pre-save verification finds that the pending page state does not match the owner's confirmed command, the workflow must block saving and enter a controlled correction flow.
+
+Examples of pre-save mismatches:
+
+- The pending device is not the confirmed device.
+- The pending advertisement list is missing a requested advertisement.
+- The pending advertisement list includes a wrong advertisement.
+- The selected advertisement candidate differs from the owner's selected candidate.
+- The page shows a state the agent cannot confidently interpret.
+
+When a mismatch is detected:
+
+1. The workflow status becomes `awaiting_correction_decision`.
+2. The save action remains unavailable.
+3. The agent writes an audit event for the mismatch.
+4. The agent reports a structured difference summary to the owner.
+5. The owner chooses whether to cancel, retry selection, remove this task's unsaved changes, or take over manually.
+
+The agent may only correct unsaved changes created during the current task. It must not remove advertisements that already existed on the device before this task began, delete advertisements from the advertisement library, or modify device information.
+
+Allowed correction actions:
+
+- Read the current pending advertisement list.
+- Remove an advertisement that the current task added but has not saved.
+- Search again for the owner-confirmed advertisement.
+- Select a newly confirmed candidate.
+- Rebuild the pending save list.
+- Run pre-save verification again.
+
+After correction, the agent must generate a new pre-save report. The final save still requires owner approval. A correction attempt never grants permission to save automatically.
+
 ## Audit Logging
 
 The first version records key step-level audit events:
@@ -596,6 +630,8 @@ The first implementation should include tests for:
 - Advertisement not found.
 - Multiple advertisement candidates.
 - Pre-save verification mismatch.
+- Pre-save correction removes only unsaved changes created by the current task.
+- Save remains blocked after correction until the owner approves the new pre-save report.
 - Save blocked before owner approval.
 - Successful happy path with mock adapter.
 - Audit events written for key steps.
