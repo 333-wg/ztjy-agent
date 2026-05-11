@@ -237,6 +237,9 @@ create table if not exists public.task_approvals (
     task_id uuid not null references public.agent_tasks(id) on delete cascade,
     approval_type text not null
         check (approval_type in ('command_confirmation', 'login_complete', 'candidate_selection', 'save_approval')),
+    subject_type text
+        check (subject_type in ('task', 'candidate', 'upload_batch', 'upload_item', 'local_asset')),
+    subject_id uuid,
     status text not null default 'pending'
         check (status in ('pending', 'approved', 'rejected', 'expired')),
     requested_payload jsonb not null default '{}'::jsonb,
@@ -346,6 +349,8 @@ create index if not exists idx_agent_tasks_target_device_no
     on public.agent_tasks (target_device_no);
 create index if not exists idx_task_approvals_task_status_type
     on public.task_approvals (task_id, status, approval_type);
+create index if not exists idx_task_approvals_task_subject
+    on public.task_approvals (task_id, subject_type, subject_id);
 create index if not exists idx_task_candidates_task_candidate_type
     on public.task_candidates (task_id, candidate_type);
 create index if not exists idx_task_candidates_task_candidate_type_ad_type
@@ -418,6 +423,15 @@ alter table public.task_approvals enable row level security;
 alter table public.audit_events enable row level security;
 alter table public.task_artifacts enable row level security;
 alter table public.resource_locks enable row level security;
+
+comment on table public.agent_tasks is
+    'Workflow writes are performed by backend service role after app-level authorization. Browser clients may read organization-scoped rows and create tasks, but cannot directly mutate workflow state.';
+comment on table public.task_candidates is
+    'Workflow writes are performed by backend service role after app-level authorization. Browser clients read candidates but do not directly change selection state.';
+comment on table public.local_asset_candidates is
+    'Workflow writes are performed by backend service role after app-level authorization. Browser clients read local asset candidates but do not directly change selection state.';
+comment on table public.task_approvals is
+    'Workflow writes are performed by backend service role after app-level authorization. Approval decisions are handled through backend APIs so browser clients cannot mutate requested approval fields.';
 
 drop policy if exists "members can read organizations" on public.organizations;
 create policy "members can read organizations"
@@ -498,11 +512,6 @@ with check (
 );
 
 drop policy if exists "operators can update agent tasks" on public.agent_tasks;
-create policy "operators can update agent tasks"
-on public.agent_tasks for update
-to authenticated
-using (public.has_organization_role(organization_id, array['owner', 'operator']))
-with check (public.has_organization_role(organization_id, array['owner', 'operator']));
 
 drop policy if exists "members can read task candidates" on public.task_candidates;
 create policy "members can read task candidates"
@@ -518,25 +527,6 @@ using (
 );
 
 drop policy if exists "operators can update task candidates" on public.task_candidates;
-create policy "operators can update task candidates"
-on public.task_candidates for update
-to authenticated
-using (
-    exists (
-        select 1
-        from public.agent_tasks task
-        where task.id = task_id
-          and public.has_organization_role(task.organization_id, array['owner', 'operator'])
-    )
-)
-with check (
-    exists (
-        select 1
-        from public.agent_tasks task
-        where task.id = task_id
-          and public.has_organization_role(task.organization_id, array['owner', 'operator'])
-    )
-);
 
 drop policy if exists "members can read upload batches" on public.ad_upload_batches;
 create policy "members can read upload batches"
@@ -557,11 +547,6 @@ to authenticated
 using (public.is_organization_member(organization_id));
 
 drop policy if exists "operators can update local asset candidates" on public.local_asset_candidates;
-create policy "operators can update local asset candidates"
-on public.local_asset_candidates for update
-to authenticated
-using (public.has_organization_role(organization_id, array['owner', 'operator']))
-with check (public.has_organization_role(organization_id, array['owner', 'operator']));
 
 drop policy if exists "members can read task approvals" on public.task_approvals;
 create policy "members can read task approvals"
@@ -577,25 +562,12 @@ using (
 );
 
 drop policy if exists "operators can decide task approvals" on public.task_approvals;
-create policy "operators can decide task approvals"
-on public.task_approvals for update
-to authenticated
-using (
-    exists (
-        select 1
-        from public.agent_tasks task
-        where task.id = task_id
-          and public.has_organization_role(task.organization_id, array['owner', 'operator'])
-    )
-)
-with check (
-    exists (
-        select 1
-        from public.agent_tasks task
-        where task.id = task_id
-          and public.has_organization_role(task.organization_id, array['owner', 'operator'])
-    )
-);
+drop policy if exists "service role can manage task approvals" on public.task_approvals;
+create policy "service role can manage task approvals"
+on public.task_approvals for all
+to service_role
+using (true)
+with check (true);
 
 drop policy if exists "members can read audit events" on public.audit_events;
 create policy "members can read audit events"
