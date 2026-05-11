@@ -109,6 +109,14 @@ def create_task(payload: CreateTaskRequest, request: Request) -> TaskEnvelope:
             result = services.upload_agent.create_upload_plan(payload.command)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if route.kind == RouteKind.MIXED_UPLOAD_THEN_BIND:
+            parsed_command = services.task_repo.get_task(result.task.id).parsed_command or {}
+            parsed_command["handoff"] = {
+                "next_workflow": "device_ad_binding",
+                "target_device_no": route.target_device_no,
+                "requires_owner_confirmation": True,
+            }
+            services.task_repo.update_task(result.task.id, parsed_command=parsed_command)
         return _task_envelope(services, result.task.id)
     raise HTTPException(status_code=400, detail=route.clarification_reason or "unsupported command")
 
@@ -142,6 +150,7 @@ def approve_task(
         services.upload_agent.approve_tag_creation_and_continue(task_id, approval_id, decided_by=payload.decided_by)
     elif approval.subject_type == "upload_item":
         services.upload_agent.approve_item_and_continue(task_id, approval_id, decided_by=payload.decided_by)
+        _prepare_mixed_handoff_if_needed(services, task_id)
     else:
         services.approval_repo.record_decision(
             approval_id,
@@ -198,6 +207,35 @@ def _task_envelope(services: ApiServices, task_id: str) -> TaskEnvelope:
         candidates=[candidate.model_dump(mode="json") for candidate in services.candidate_repo.list_candidates(task_id)],
         upload_batches=[batch.model_dump(mode="json") for batch in batches],
         upload_items=[item.model_dump(mode="json") for item in upload_items],
+    )
+
+
+def _prepare_mixed_handoff_if_needed(services: ApiServices, task_id: str) -> None:
+    task = services.task_repo.get_task(task_id)
+    handoff = (task.parsed_command or {}).get("handoff")
+    if task.status != TaskStatus.SUCCEEDED or not isinstance(handoff, dict):
+        return
+    if handoff.get("next_workflow") != "device_ad_binding":
+        return
+    existing = [
+        approval
+        for approval in services.approval_repo.list_approvals(task_id)
+        if approval.subject_type == "task"
+        and approval.approval_type == ApprovalType.COMMAND_CONFIRMATION
+        and approval.requested_payload.get("handoff") == handoff
+    ]
+    if not existing:
+        services.approval_repo.create_approval(
+            task_id=task_id,
+            approval_type=ApprovalType.COMMAND_CONFIRMATION,
+            requested_payload={"handoff": handoff},
+            subject_type="task",
+            subject_id=task_id,
+        )
+    services.task_repo.update_task(
+        task_id,
+        status=TaskStatus.AWAITING_COMMAND_CONFIRMATION,
+        awaiting_action="owner_device_binding_handoff_confirmation",
     )
 
 
