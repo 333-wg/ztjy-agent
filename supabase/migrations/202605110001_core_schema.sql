@@ -307,6 +307,19 @@ begin
 end;
 $$;
 
+create or replace function public.prevent_organization_id_change()
+returns trigger
+language plpgsql
+as $$
+begin
+    if new.organization_id is distinct from old.organization_id then
+        raise exception 'cannot change organization_id';
+    end if;
+
+    return new;
+end;
+$$;
+
 create or replace function public.assert_workflow_organization_consistency()
 returns trigger
 language plpgsql
@@ -545,6 +558,16 @@ create trigger set_browser_sessions_updated_at
 before update on public.browser_sessions
 for each row execute function public.set_updated_at();
 
+drop trigger if exists prevent_admin_targets_organization_move on public.admin_targets;
+create trigger prevent_admin_targets_organization_move
+before update of organization_id on public.admin_targets
+for each row execute function public.prevent_organization_id_change();
+
+drop trigger if exists prevent_browser_sessions_organization_move on public.browser_sessions;
+create trigger prevent_browser_sessions_organization_move
+before update of organization_id on public.browser_sessions
+for each row execute function public.prevent_organization_id_change();
+
 drop trigger if exists set_agent_tasks_updated_at on public.agent_tasks;
 create trigger set_agent_tasks_updated_at
 before update on public.agent_tasks
@@ -695,6 +718,10 @@ alter table public.audit_events enable row level security;
 alter table public.task_artifacts enable row level security;
 alter table public.resource_locks enable row level security;
 
+comment on table public.admin_targets is
+    'Organization ownership is immutable for tenancy safety. Moving an admin target across organizations could invalidate browser session and task relationship checks.';
+comment on table public.browser_sessions is
+    'Organization ownership is immutable for tenancy safety. Moving a browser session across organizations could invalidate task relationship checks.';
 comment on table public.agent_tasks is
     'Workflow writes are performed by backend service role after app-level authorization. Tasks are created by backend service role after app-level authorization. Browser clients may read organization-scoped rows but cannot directly create or mutate workflow state.';
 comment on table public.task_candidates is

@@ -135,6 +135,17 @@ def test_migration_validates_polymorphic_approval_subjects():
     assert "task_approvals task subject mismatch" in sql
 
 
+def test_migration_prevents_parent_tenant_moves():
+    sql = MIGRATION.read_text(encoding="utf-8").lower()
+    assert "create or replace function public.prevent_organization_id_change()" in sql
+    for table in ["admin_targets", "browser_sessions"]:
+        assert f"create trigger prevent_{table}_organization_move" in sql
+        assert f"on public.{table}" in sql
+        assert f"comment on table public.{table}" in sql
+    assert "organization ownership is immutable for tenancy safety" in sql
+    assert "cannot change organization_id" in sql
+
+
 def test_seed_defines_initial_agent_permission_sets():
     sql = SEED.read_text(encoding="utf-8").lower()
     for agent_key in ["device_ad_agent", "ad_upload_agent"]:
