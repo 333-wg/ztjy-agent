@@ -9,18 +9,38 @@ from backend.app.browser.adapters import (
     SaveResult,
     TagRecord,
 )
+from backend.app.core.config import Settings
 from backend.app.workflows.state import AdvertisementType
 
 
 class PlaywrightAdminAdapter:
     """Guarded skeleton for real management-backend automation."""
 
-    def __init__(self, base_url: str, profile_path: str | None = None) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        profile_path: str | None = None,
+        profile_alias: str | None = None,
+        login_success_selector: str | None = None,
+    ) -> None:
         self.base_url = base_url
         self.profile_path = profile_path
+        self.profile_alias = profile_alias
+        self.login_success_selector = login_success_selector
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> "PlaywrightAdminAdapter":
+        return cls(
+            base_url=settings.admin_backend_url,
+            profile_path=settings.browser_profile_path or None,
+            profile_alias=settings.browser_profile_alias or None,
+            login_success_selector=settings.playwright_login_success_selector or None,
+        )
 
     def check_login(self) -> LoginState:
-        raise NotImplementedError("Playwright login check requires real backend selectors")
+        if not self.login_success_selector:
+            raise NotImplementedError("Playwright login success selector is not configured")
+        raise NotImplementedError("Playwright login check requires a real browser page binding")
 
     def open_device_management(self) -> None:
         raise NotImplementedError("Playwright device-management navigation requires real backend selectors")
