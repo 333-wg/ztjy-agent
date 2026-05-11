@@ -54,6 +54,8 @@ class ApprovalRepository(Protocol):
 
     def get_approval(self, approval_id: str) -> TaskApproval: ...
 
+    def list_approvals(self, task_id: str) -> list[TaskApproval]: ...
+
     def record_decision(
         self,
         approval_id: str,
@@ -83,6 +85,8 @@ class UploadBatchRepository(Protocol):
     def create_batch(self, task_id: str, company_request: str, total_items: int, **kwargs: Any) -> UploadBatch: ...
 
     def get_batch(self, batch_id: str) -> UploadBatch: ...
+
+    def list_batches(self, task_id: str) -> list[UploadBatch]: ...
 
     def update_batch(self, batch_id: str, **changes: Any) -> UploadBatch: ...
 
@@ -183,6 +187,9 @@ class InMemoryApprovalRepository:
     def get_approval(self, approval_id: str) -> TaskApproval:
         return _copy(self._approvals[approval_id])
 
+    def list_approvals(self, task_id: str) -> list[TaskApproval]:
+        return [_copy(approval) for approval in self._approvals.values() if approval.task_id == task_id]
+
     def record_decision(
         self,
         approval_id: str,
@@ -257,6 +264,9 @@ class InMemoryUploadBatchRepository:
 
     def get_batch(self, batch_id: str) -> UploadBatch:
         return _copy(self._batches[batch_id])
+
+    def list_batches(self, task_id: str) -> list[UploadBatch]:
+        return [_copy(batch) for batch in self._batches.values() if batch.task_id == task_id]
 
     def update_batch(self, batch_id: str, **changes: Any) -> UploadBatch:
         batch = self._batches[batch_id]
