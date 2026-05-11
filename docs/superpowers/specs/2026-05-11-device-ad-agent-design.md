@@ -201,6 +201,8 @@ These tables track metadata for real backend access without storing sensitive lo
     - `target_device_no`
     - `requested_ads`
     - `matched_device`
+    - `baseline_ads`
+    - `task_added_ads`
     - `matched_ads`
     - `pending_save_report`
     - `error_code`
@@ -223,7 +225,7 @@ Task statuses:
 - `failed`
 - `cancelled`
 
-`parsed_command`, `requested_ads`, `matched_device`, `matched_ads`, and `pending_save_report` should be `jsonb` so the workflow can store structured facts without premature schema churn. Stable, frequently queried fields such as `target_device_no`, `status`, `agent_key`, and `created_at` should remain first-class columns with indexes.
+`parsed_command`, `requested_ads`, `matched_device`, `baseline_ads`, `task_added_ads`, `matched_ads`, and `pending_save_report` should be `jsonb` so the workflow can store structured facts without premature schema churn. Stable, frequently queried fields such as `target_device_no`, `status`, `agent_key`, and `created_at` should remain first-class columns with indexes.
 
 - `task_candidates`
   - Candidate objects shown to the owner when a device or advertisement search is ambiguous.
@@ -408,16 +410,39 @@ The workflow proceeds through these states:
 7. Search for the device number.
 8. Require exactly one matching device.
 9. Open the device's advertisement configuration entry.
-10. Search for each requested advertisement.
-11. If an advertisement has multiple candidates, list candidates and ask the owner to choose.
-12. If an advertisement is missing, stop and report.
-13. Add selected advertisements to the pending save list.
-14. Read the pending save list from the page.
-15. Compare pending device and advertisements with the original confirmed command.
-16. Show a pre-save report to the owner.
-17. Save only after owner approval.
-18. Read the save result and report success or failure.
-19. Write final audit entries.
+10. Read and record the device's existing advertisement baseline.
+11. Search for each requested advertisement.
+12. If an advertisement has multiple candidates, list candidates and ask the owner to choose.
+13. If an advertisement is missing, stop and report.
+14. Add selected advertisements to the pending save list.
+15. Read the pending save list from the page.
+16. Compare pending device, baseline advertisements, newly added advertisements, and the original confirmed command.
+17. Show a pre-save report to the owner.
+18. Save only after owner approval.
+19. Read the save result and report success or failure.
+20. Write final audit entries.
+
+## Incremental Binding Invariant
+
+The device advertisement workflow is an add-only workflow. The owner is asking the agent to add advertisements to a device, not to replace the device's whole advertisement list.
+
+After opening the device advertisement configuration page, the agent must read and store a baseline of advertisements that already exist on the device before making any change. The baseline should include all identifying fields the backend exposes, such as advertisement ID, name, type, status, and effective time.
+
+During this task:
+
+- Baseline advertisements are protected.
+- The agent must not remove, deselect, overwrite, clear, or replace baseline advertisements.
+- The agent must track which pending advertisements were added by the current task.
+- Any correction or retry may only remove advertisements added by the current task and not yet saved.
+- If the page only supports replacing the full advertisement list instead of incremental add, the workflow must stop and report that the page behavior is outside the first version's permission scope.
+- If the page presents a "clear all", "replace", "overwrite", "delete", or similar bulk operation, the workflow must treat it as blocked unless a separately designed higher-risk workflow explicitly allows it.
+
+The pre-save report must show:
+
+- Existing baseline advertisements that will remain untouched.
+- New advertisements added by this task.
+- Any correction actions taken on this task's unsaved additions.
+- Confirmation that no baseline advertisement was removed or modified.
 
 ## Allowed Actions
 
@@ -444,6 +469,8 @@ The first version must block these actions:
 - Delete advertisements.
 - Delete devices.
 - Modify device profile information.
+- Remove, clear, overwrite, or replace advertisements that existed on the device before the current task.
+- Use "clear all", "replace all", or full-list overwrite behavior for this add-only workflow.
 - Change system configuration.
 - Perform batch operations outside the confirmed device.
 - Save before owner approval.
@@ -484,10 +511,12 @@ Before final save, the agent must produce a pre-save verification report contain
 - Original owner command.
 - Parsed device number.
 - Matched device details.
+- Baseline advertisements that already existed on the device before this task.
 - Requested advertisement names.
 - Matched advertisement details.
+- New advertisements added by this task.
 - Pending page state read from the browser.
-- A statement that the agent did not create advertisements, delete data, or modify device profile information.
+- A statement that the agent did not create advertisements, delete data, remove baseline advertisements, or modify device profile information.
 
 The save button in the workflow is enabled only after the owner approves this report.
 
@@ -500,6 +529,7 @@ Examples of pre-save mismatches:
 - The pending device is not the confirmed device.
 - The pending advertisement list is missing a requested advertisement.
 - The pending advertisement list includes a wrong advertisement.
+- The pending advertisement list removed or changed a baseline advertisement.
 - The selected advertisement candidate differs from the owner's selected candidate.
 - The page shows a state the agent cannot confidently interpret.
 
@@ -533,7 +563,9 @@ The first version records key step-level audit events:
 - Owner confirmed parsed command.
 - Login state checked.
 - Device search completed.
+- Existing device advertisement baseline recorded.
 - Advertisement search completed.
+- Current task additions recorded.
 - Candidate selection requested or completed.
 - Pre-save verification generated.
 - Owner approved or rejected save.
@@ -631,6 +663,8 @@ The first implementation should include tests for:
 - Multiple advertisement candidates.
 - Pre-save verification mismatch.
 - Pre-save correction removes only unsaved changes created by the current task.
+- Baseline advertisements are preserved during correction.
+- Full-list overwrite behavior is blocked for the add-only workflow.
 - Save remains blocked after correction until the owner approves the new pre-save report.
 - Save blocked before owner approval.
 - Successful happy path with mock adapter.
