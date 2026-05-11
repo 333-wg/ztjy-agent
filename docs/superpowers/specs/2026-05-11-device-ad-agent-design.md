@@ -11,7 +11,7 @@ The agent must not freely operate the backend. It can only call explicitly white
 ## Goals
 
 - Accept natural language commands from the owner.
-- Parse commands into a target device number, advertisement names, and an intended action.
+- Parse commands into a target device number, structured advertisement requests, and an intended action.
 - Confirm the parsed command before browser operation begins.
 - Use the browser's existing management-system login state.
 - If not logged in, stop and ask the owner to log in manually.
@@ -44,16 +44,28 @@ Example command:
 The system should parse this as:
 
 - Target device number: `10086`
-- Advertisement names: `五一促销广告`, `新品视频`
+- Advertisement requests:
+  - Name: `五一促销广告`, type: `unknown`, category: unspecified
+  - Name: `新品视频`, type: `video`, category: unspecified
 - Action: bind existing advertisements to the device
 
 Before operating the backend, the agent must show the parsed result and state the allowed scope:
 
 ```text
 我理解为：目标设备号是 10086；要绑定的广告是：五一促销广告、新品视频。
-本次只会进入设备管理进行广告绑定，不会创建广告、删除广告或修改设备信息。
+其中“新品视频”会按视频广告搜索；“五一促销广告”未指定类型，我会同时结合名称、分类和搜索结果确认。
+本次只会进入设备管理进行广告绑定，不会创建广告、删除广告、移除设备原有广告或修改设备信息。
 请确认是否开始。
 ```
+
+Advertisement requests are structured, not plain strings. Each requested advertisement may include:
+
+- Name or keyword.
+- Type: `image`, `video`, or `unknown`.
+- Category when provided by the owner or selected from backend filters.
+- Owner notes, such as a campaign phrase or expected effective period.
+
+The backend may support selecting multiple advertisements at once. The agent may use multi-select only after every selected advertisement has been matched to the owner-confirmed request set.
 
 ## Architecture
 
@@ -79,7 +91,7 @@ The system has five main parts.
    - Handles failure branches such as missing login, multiple matches, and permission violations.
 
 4. Browser adapter layer
-   - Provides narrow business methods such as `search_device`, `search_ad`, and `save_after_approval`.
+   - Provides narrow business methods such as `search_device`, `search_ads`, and `save_after_approval`.
    - Hides raw Playwright access from the agent workflow.
    - Starts with a `MockAdminAdapter`.
    - Later adds a `PlaywrightAdminAdapter` for the real management backend.
@@ -157,8 +169,10 @@ Initial `device_ad_agent` allowed actions:
 - `open_device_management`
 - `search_device`
 - `open_device_ad_config`
-- `search_existing_ad`
-- `select_owner_approved_ad`
+- `search_existing_ads`
+- `filter_ads_by_type`
+- `filter_ads_by_category`
+- `select_owner_approved_ads`
 - `add_selected_ad_to_pending_list`
 - `read_pending_ads`
 - `save_after_owner_approval`
@@ -227,9 +241,27 @@ Task statuses:
 
 `parsed_command`, `requested_ads`, `matched_device`, `baseline_ads`, `task_added_ads`, `matched_ads`, and `pending_save_report` should be `jsonb` so the workflow can store structured facts without premature schema churn. Stable, frequently queried fields such as `target_device_no`, `status`, `agent_key`, and `created_at` should remain first-class columns with indexes.
 
+Advertisement JSON objects should use this shape when fields are available:
+
+```json
+{
+  "name": "May promotion advertisement",
+  "type": "image",
+  "category": "holiday promotion",
+  "external_ref": "ad_123",
+  "status": "active",
+  "effective_time": {
+    "starts_at": "2026-05-01T00:00:00+08:00",
+    "ends_at": "2026-05-31T23:59:59+08:00"
+  }
+}
+```
+
+Allowed advertisement types are `image`, `video`, and `unknown`. The parser should use `unknown` when the owner does not specify type and the backend result has not been read yet.
+
 - `task_candidates`
   - Candidate objects shown to the owner when a device or advertisement search is ambiguous.
-  - Fields: `id`, `task_id`, `candidate_type`, `external_ref`, `display_name`, `metadata`, `selection_status`, `created_at`, `selected_at`, `selected_by`.
+  - Fields: `id`, `task_id`, `candidate_type`, `external_ref`, `display_name`, `ad_type`, `category`, `metadata`, `selection_status`, `created_at`, `selected_at`, `selected_by`.
   - Candidate types: `device`, `advertisement`.
 
 - `task_approvals`
@@ -326,6 +358,8 @@ Recommended initial indexes:
 - `agent_tasks(target_device_no)`
 - `task_approvals(task_id, status, approval_type)`
 - `task_candidates(task_id, candidate_type)`
+- `task_candidates(task_id, candidate_type, ad_type)`
+- `task_candidates(task_id, candidate_type, category)`
 - `audit_events(organization_id, task_id, created_at desc)`
 - `audit_events(organization_id, created_at desc)`
 - `resource_locks(lock_key, locked_until)`
@@ -402,7 +436,7 @@ Cross-agent handoff must be explicit. For example, if an advertisement does not 
 The workflow proceeds through these states:
 
 1. Receive natural language command.
-2. Parse command into device number, advertisement names, and action.
+2. Parse command into device number, advertisement requests, and action.
 3. Ask owner to confirm the parsed command.
 4. Check backend login state.
 5. If not logged in, ask owner to log in manually and pause.
@@ -411,10 +445,10 @@ The workflow proceeds through these states:
 8. Require exactly one matching device.
 9. Open the device's advertisement configuration entry.
 10. Read and record the device's existing advertisement baseline.
-11. Search for each requested advertisement.
+11. Search for requested advertisements, using advertisement type and category filters when the command or owner confirmation provides them.
 12. If an advertisement has multiple candidates, list candidates and ask the owner to choose.
 13. If an advertisement is missing, stop and report.
-14. Add selected advertisements to the pending save list.
+14. Add selected advertisements to the pending save list. If the backend supports multi-select, the agent may use multi-select only for the exact owner-confirmed advertisement set.
 15. Read the pending save list from the page.
 16. Compare pending device, baseline advertisements, newly added advertisements, and the original confirmed command.
 17. Show a pre-save report to the owner.
@@ -453,8 +487,8 @@ The first version allows only these actions:
 - Open device management.
 - Search by device number.
 - Open the advertisement configuration entry for the uniquely matched device.
-- Search existing advertisements by advertisement name.
-- Select owner-approved advertisement candidates.
+- Search existing advertisements by advertisement name, type, and category.
+- Select one or more owner-approved advertisement candidates.
 - Add selected advertisements to the pending list.
 - Read the pending list for verification.
 - Save after owner approval.
@@ -487,10 +521,16 @@ Device matching:
 
 Advertisement matching:
 
-- If an advertisement name produces exactly one clear result, continue.
+- Advertisements can be image advertisements or video advertisements.
+- Advertisement search can use name keywords, type filters, and category filters when available.
+- The natural language parser should extract each requested advertisement as a structured object: `name`, optional `type`, optional `category`, and optional owner notes.
+- If the owner says "图片广告", "视频广告", or gives a category, the agent must include those constraints in the search and in the confirmation report.
+- If an advertisement name and filters produce exactly one clear result, continue.
 - If multiple candidates are found, list candidates and ask the owner to choose.
 - If no advertisement is found, stop and report that this must be handled by a future Advertisement Upload Agent.
-- Candidate reports should include available identifying fields, such as name, type, ID, status, and effective time, when the backend exposes them.
+- Candidate reports should include available identifying fields, such as name, type, category, ID, status, and effective time, when the backend exposes them.
+- Multi-select is allowed only after the final candidate set is known. The agent must not use "select all" unless every visible selected item exactly matches the owner-confirmed requested advertisement set.
+- After multi-select, the agent must read the pending list and compare it with the requested advertisement set before asking for save approval.
 
 ## Login Handling
 
@@ -513,6 +553,7 @@ Before final save, the agent must produce a pre-save verification report contain
 - Matched device details.
 - Baseline advertisements that already existed on the device before this task.
 - Requested advertisement names.
+- Requested advertisement types and categories when provided.
 - Matched advertisement details.
 - New advertisements added by this task.
 - Pending page state read from the browser.
@@ -633,8 +674,9 @@ The browser adapter interface should be designed to match real backend operation
 - `open_device_management()`
 - `search_device(device_no)`
 - `open_device_ad_config(device_id)`
-- `search_ad(ad_name)`
-- `select_ad(ad_id)`
+- `read_existing_device_ads()`
+- `search_ads(name, ad_type=None, category=None)`
+- `select_ads(ad_ids)`
 - `read_pending_ads()`
 - `save_after_approval()`
 - `read_save_result()`
@@ -661,6 +703,10 @@ The first implementation should include tests for:
 - Multiple devices found.
 - Advertisement not found.
 - Multiple advertisement candidates.
+- Advertisement type filtering for image and video advertisements.
+- Advertisement category filtering.
+- Multi-select selects only the owner-confirmed advertisement IDs.
+- Multi-select is blocked when the visible selection includes extra advertisements.
 - Pre-save verification mismatch.
 - Pre-save correction removes only unsaved changes created by the current task.
 - Baseline advertisements are preserved during correction.
@@ -681,7 +727,10 @@ These details are intentionally deferred until real backend integration:
 
 - Management backend URL.
 - Test device numbers.
-- Test advertisement names.
+- Test advertisement names, types, and categories.
+- Backend advertisement category taxonomy.
+- Backend advertisement search fields and filter behavior.
+- Whether multi-select adds selected advertisements incrementally or replaces the current list.
 - Actual menu paths and page selectors.
 - Whether the backend has a staging environment.
 - Fields available in device and advertisement search results.
