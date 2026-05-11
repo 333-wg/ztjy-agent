@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from backend.app.browser.adapters import DeviceAdBrowserAdapter
 from backend.app.db.repositories import (
     ApprovalRepository,
@@ -26,6 +28,7 @@ class DeviceAdvertisementAgent:
         candidate_repo: CandidateRepository,
         audit_repo: AuditRepository,
         permissions: PermissionSet | None = None,
+        checkpointer: Any | None = None,
     ) -> None:
         self._runner = DeviceAdGraphRunner(
             browser=browser,
@@ -34,6 +37,7 @@ class DeviceAdvertisementAgent:
             candidate_repo=candidate_repo,
             audit_repo=audit_repo,
             permissions=permissions,
+            checkpointer=checkpointer,
         )
 
     def prepare_binding(

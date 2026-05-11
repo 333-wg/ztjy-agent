@@ -8,9 +8,15 @@ Copy `.env.example` to `.env` and fill:
 SUPABASE_URL=
 SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
+LANGGRAPH_CHECKPOINTER=postgres
+LANGGRAPH_POSTGRES_URL=
+LANGGRAPH_POSTGRES_SETUP=false
 ```
 
 The service role key is server-only. It must not be sent to frontend DTOs or stored in browser-accessible configuration.
+
+`LANGGRAPH_POSTGRES_URL` is the Supabase Postgres connection string, not the Supabase REST URL.
+Set `LANGGRAPH_POSTGRES_SETUP=true` only during an intentional checkpoint table setup run, then switch it back to `false`.
 
 ## Schema
 
@@ -27,6 +33,13 @@ supabase/seed.sql
 ```
 
 The schema includes organizations, users, agent definitions, permission sets, tasks, approvals, candidates, upload batches/items, local asset candidates, audit events, artifacts, browser sessions, admin targets, and resource locks.
+
+LangGraph checkpoint tables are internal workflow state. The app-facing task status, approvals, candidates, upload queue, and audit trail still live in the application tables above.
+
+Thread IDs are stable and scoped:
+
+- Device binding graph: `device_ad_binding:{task_id}`
+- Upload item graph: `ad_upload_item:{task_id}:{item_id}`
 
 ## Validation
 

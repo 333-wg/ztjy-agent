@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from backend.app.agents.ad_upload_agent import AdvertisementUploadAgent
 from backend.app.agents.device_ad_agent import DeviceAdvertisementAgent
+from backend.app.agents.llm_parser import build_command_parser
 from backend.app.agents.router import RouteKind, TaskRouter
 from backend.app.api.schemas import (
     ApprovalDecisionRequest,
@@ -17,6 +18,7 @@ from backend.app.api.schemas import (
     TaskEnvelope,
 )
 from backend.app.browser.mock_admin import MockAdminAdapter
+from backend.app.core.config import settings
 from backend.app.db.repositories import (
     InMemoryApprovalRepository,
     InMemoryAuditRepository,
@@ -26,6 +28,7 @@ from backend.app.db.repositories import (
     InMemoryUploadBatchRepository,
     InMemoryUploadItemRepository,
 )
+from backend.app.workflows.checkpointing import CheckpointerResource, create_checkpointer_resource
 from backend.app.workflows.state import (
     AdvertisementRequest,
     AdvertisementType,
@@ -53,6 +56,11 @@ class ApiServices:
     asset_candidate_repo: InMemoryLocalAssetCandidateRepository
     device_agent: DeviceAdvertisementAgent
     upload_agent: AdvertisementUploadAgent
+    checkpointer_resource: CheckpointerResource
+    task_router: TaskRouter
+
+    def close(self) -> None:
+        self.checkpointer_resource.close()
 
 
 def create_mock_services(asset_base_dirs: list[str | Path] | None = None) -> ApiServices:
@@ -64,6 +72,12 @@ def create_mock_services(asset_base_dirs: list[str | Path] | None = None) -> Api
     item_repo = InMemoryUploadItemRepository()
     asset_candidate_repo = InMemoryLocalAssetCandidateRepository()
     browser = MockAdminAdapter.with_default_fixtures()
+    checkpointer_resource = create_checkpointer_resource(
+        settings.langgraph_checkpointer,
+        postgres_url=settings.langgraph_postgres_url,
+        run_postgres_setup=settings.langgraph_postgres_setup,
+    )
+    task_router = TaskRouter(build_command_parser(settings))
     return ApiServices(
         task_repo=task_repo,
         approval_repo=approval_repo,
@@ -72,12 +86,15 @@ def create_mock_services(asset_base_dirs: list[str | Path] | None = None) -> Api
         batch_repo=batch_repo,
         item_repo=item_repo,
         asset_candidate_repo=asset_candidate_repo,
+        checkpointer_resource=checkpointer_resource,
+        task_router=task_router,
         device_agent=DeviceAdvertisementAgent(
             browser=browser,
             task_repo=task_repo,
             approval_repo=approval_repo,
             candidate_repo=candidate_repo,
             audit_repo=audit_repo,
+            checkpointer=checkpointer_resource.checkpointer,
         ),
         upload_agent=AdvertisementUploadAgent(
             browser=browser,
@@ -89,6 +106,8 @@ def create_mock_services(asset_base_dirs: list[str | Path] | None = None) -> Api
             item_repo=item_repo,
             asset_candidate_repo=asset_candidate_repo,
             audit_repo=audit_repo,
+            checkpointer=checkpointer_resource.checkpointer,
+            command_parser=task_router,
         ),
     )
 
@@ -96,12 +115,12 @@ def create_mock_services(asset_base_dirs: list[str | Path] | None = None) -> Api
 @router.post("/tasks", response_model=TaskEnvelope)
 def create_task(payload: CreateTaskRequest, request: Request) -> TaskEnvelope:
     services = _services(request)
-    route = TaskRouter().route(payload.command)
+    route = services.task_router.route(payload.command)
     if route.kind == RouteKind.DEVICE_AD_BINDING and route.target_device_no:
         result = services.device_agent.prepare_binding(
             original_command=payload.command,
             target_device_no=route.target_device_no,
-            requested_ads=_extract_device_ad_requests(payload.command),
+            requested_ads=route.requested_ads or _extract_device_ad_requests(payload.command),
         )
         return _task_envelope(services, result.task.id)
     if route.kind in {RouteKind.AD_UPLOAD, RouteKind.MIXED_UPLOAD_THEN_BIND}:

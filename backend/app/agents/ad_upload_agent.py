@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from backend.app.browser.adapters import AdUploadBrowserAdapter
+from backend.app.agents.router import CommandParser
 from backend.app.db.repositories import (
     ApprovalRepository,
     AuditRepository,
@@ -31,6 +33,8 @@ class AdvertisementUploadAgent:
         asset_candidate_repo: LocalAssetCandidateRepository,
         audit_repo: AuditRepository,
         permissions: PermissionSet | None = None,
+        checkpointer: Any | None = None,
+        command_parser: CommandParser | None = None,
     ) -> None:
         self.item_repo = item_repo
         self._runner = AdvertisementUploadGraphRunner(
@@ -44,6 +48,8 @@ class AdvertisementUploadAgent:
             asset_candidate_repo=asset_candidate_repo,
             audit_repo=audit_repo,
             permissions=permissions,
+            checkpointer=checkpointer,
+            command_parser=command_parser,
         )
 
     def create_upload_plan(self, command: str) -> AdUploadWorkflowResult:

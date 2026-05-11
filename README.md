@@ -7,6 +7,7 @@ The current build runs in mock mode. It supports:
 - natural-language task creation through FastAPI
 - deterministic routing to device advertisement binding or advertisement upload workflows
 - LangGraph-backed workflow steps for device binding and upload item processing
+- LangGraph checkpointing with stable thread IDs for multi-turn workflow state
 - owner approval gates before save actions
 - add-only device advertisement binding that preserves baseline ads
 - sequential advertisement upload items with local asset validation
@@ -36,6 +37,10 @@ uv run pytest -v
 cd frontend
 npm run build
 ```
+
+Local checkpointing defaults to `LANGGRAPH_CHECKPOINTER=memory`. Production can use Supabase Postgres by setting `LANGGRAPH_CHECKPOINTER=postgres` and `LANGGRAPH_POSTGRES_URL` to the database connection string.
+
+LLM command parsing defaults to `LLM_PARSER_MODE=deterministic`. Set `LLM_PARSER_MODE=hybrid`, `LLM_PROVIDER=openai_compatible`, `LLM_API_KEY`, `LLM_BASE_URL`, and `LLM_MODEL` to enable model-assisted routing without giving the model direct browser-control permissions.
 
 ## Real Backend Status
 

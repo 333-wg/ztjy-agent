@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from langgraph.graph import END, StateGraph
 from typing_extensions import TypedDict
@@ -14,6 +15,7 @@ from backend.app.db.repositories import (
 )
 from backend.app.safety.approvals import build_save_approval_request, verify_save_approval
 from backend.app.safety.permissions import PermissionSet
+from backend.app.workflows.checkpointing import device_ad_thread_id, graph_thread_config
 from backend.app.workflows.state import (
     AdvertisementRequest,
     AgentTask,
@@ -79,6 +81,7 @@ class DeviceAdGraphRunner:
         candidate_repo: CandidateRepository,
         audit_repo: AuditRepository,
         permissions: PermissionSet | None = None,
+        checkpointer: Any | None = None,
     ) -> None:
         self.browser = browser
         self.task_repo = task_repo
@@ -86,6 +89,7 @@ class DeviceAdGraphRunner:
         self.candidate_repo = candidate_repo
         self.audit_repo = audit_repo
         self.permissions = permissions or PermissionSet.for_device_ad_agent()
+        self.checkpointer = checkpointer
         self.graph = self._build_graph()
 
     def prepare(
@@ -117,7 +121,8 @@ class DeviceAdGraphRunner:
                 "task_id": task.id,
                 "target_device_no": target_device_no,
                 "requested_ads": requested_ads,
-            }
+            },
+            config=graph_thread_config(device_ad_thread_id(task.id)),
         )
         saved_task = self.task_repo.get_task(task.id)
         return DeviceAdPrepareResult(
@@ -190,7 +195,7 @@ class DeviceAdGraphRunner:
         )
         graph.add_edge("create_save_approval", END)
         graph.add_edge("finish_failed", END)
-        return graph.compile()
+        return graph.compile(checkpointer=self.checkpointer)
 
     def _check_login(self, state: DeviceAdGraphState) -> DeviceAdGraphState:
         self.permissions.require("check_login")

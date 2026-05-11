@@ -41,3 +41,11 @@ Missing tags require a separate owner approval before creation.
 ## Mixed Workflow Handoff
 
 Mixed upload-then-bind commands complete the upload phase first. The system then creates a new task-level confirmation for device binding handoff. It does not automatically start the Device Advertisement Agent.
+
+## LLM Boundary
+
+LLM command parsing is optional and controlled by `LLM_PARSER_MODE`.
+The LLM can only return structured routing fields such as workflow kind, device number, company, tag, and local asset names.
+It cannot call browser methods, bypass permission checks, save forms, create tags, bind devices, or approve actions.
+
+Recommended production mode is `hybrid`: deterministic parsing runs first, and the model is used only for unclear natural-language commands.

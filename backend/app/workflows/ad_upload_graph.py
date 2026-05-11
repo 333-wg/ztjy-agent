@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from langgraph.graph import END, StateGraph
 from typing_extensions import TypedDict
 
-from backend.app.agents.router import RouteKind, TaskRouter
+from backend.app.agents.router import CommandParser, RouteKind, TaskRouter
 from backend.app.assets.local_search import search_local_assets
 from backend.app.assets.media_validation import MediaValidationError, validate_asset_for_ad_type
 from backend.app.browser.adapters import AdUploadBrowserAdapter
@@ -21,6 +22,7 @@ from backend.app.db.repositories import (
 )
 from backend.app.safety.approvals import build_save_approval_request, verify_save_approval
 from backend.app.safety.permissions import PermissionSet
+from backend.app.workflows.checkpointing import graph_thread_config, upload_item_thread_id
 from backend.app.workflows.state import (
     AdvertisementType,
     AgentTask,
@@ -67,6 +69,8 @@ class AdvertisementUploadGraphRunner:
         asset_candidate_repo: LocalAssetCandidateRepository,
         audit_repo: AuditRepository,
         permissions: PermissionSet | None = None,
+        checkpointer: Any | None = None,
+        command_parser: CommandParser | None = None,
     ) -> None:
         self.browser = browser
         self.asset_base_dirs = asset_base_dirs
@@ -78,6 +82,8 @@ class AdvertisementUploadGraphRunner:
         self.asset_candidate_repo = asset_candidate_repo
         self.audit_repo = audit_repo
         self.permissions = permissions or PermissionSet.for_ad_upload_agent()
+        self.checkpointer = checkpointer
+        self.command_parser = command_parser or TaskRouter()
         self._task_batches: dict[str, str] = {}
         self.item_graph = self._build_item_graph()
 
@@ -231,7 +237,10 @@ class AdvertisementUploadGraphRunner:
 
     def retry_current_item(self, task_id: str, item_id: str) -> AdUploadWorkflowResult:
         item = self._reset_item_for_retry(task_id, item_id)
-        final_state = self.item_graph.invoke({"task_id": task_id, "batch_id": item.batch_id, "item_id": item.id})
+        final_state = self.item_graph.invoke(
+            {"task_id": task_id, "batch_id": item.batch_id, "item_id": item.id},
+            config=graph_thread_config(upload_item_thread_id(task_id, item.id)),
+        )
         return self._result(task_id, item_save_approval=final_state.get("item_save_approval"))
 
     def change_item_asset_and_retry(
@@ -332,7 +341,10 @@ class AdvertisementUploadGraphRunner:
             self.batch_repo.update_batch(batch_id, status="completed")
             task = self.task_repo.update_task_status(task_id, TaskStatus.SUCCEEDED)
             return AdUploadWorkflowResult(task=task, batch=self.batch_repo.get_batch(batch_id))
-        final_state = self.item_graph.invoke({"task_id": task_id, "batch_id": batch_id, "item_id": next_item.id})
+        final_state = self.item_graph.invoke(
+            {"task_id": task_id, "batch_id": batch_id, "item_id": next_item.id},
+            config=graph_thread_config(upload_item_thread_id(task_id, next_item.id)),
+        )
         return self._result(task_id, item_save_approval=final_state.get("item_save_approval"))
 
     def _build_item_graph(self):
@@ -354,7 +366,7 @@ class AdvertisementUploadGraphRunner:
         )
         graph.add_edge("create_item_save_approval", END)
         graph.add_edge("finish_item_failure", END)
-        return graph.compile()
+        return graph.compile(checkpointer=self.checkpointer)
 
     def _search_local_asset(self, state: AdUploadGraphState) -> AdUploadGraphState:
         item = self.item_repo.get_item(state["item_id"])
@@ -471,7 +483,7 @@ class AdvertisementUploadGraphRunner:
         return state
 
     def _parse_upload_plan(self, command: str) -> tuple[str, str, list[str]]:
-        route = TaskRouter().route(command)
+        route = self.command_parser.parse(command)
         if route.kind not in {RouteKind.AD_UPLOAD, RouteKind.MIXED_UPLOAD_THEN_BIND}:
             raise ValueError("command is not an advertisement upload request")
         if not route.company_query:

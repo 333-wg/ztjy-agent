@@ -1,6 +1,17 @@
 from fastapi.testclient import TestClient
 
+from backend.app.agents.router import RouteKind, TaskRoute, TaskRouter
+from backend.app.api.routes import create_mock_services
 from backend.app.main import create_app
+from backend.app.workflows.state import AdvertisementRequest, AdvertisementType
+
+
+class StubParser:
+    def __init__(self, route: TaskRoute) -> None:
+        self.route = route
+
+    def parse(self, command: str) -> TaskRoute:
+        return self.route
 
 
 def test_task_api_creates_device_binding_task_and_approves_save():
@@ -17,6 +28,30 @@ def test_task_api_creates_device_binding_task_and_approves_save():
 
     assert approved.status_code == 200
     assert approved.json()["task"]["status"] == "succeeded"
+
+
+def test_task_api_uses_structured_route_ad_requests_for_device_binding():
+    services = create_mock_services()
+    services.task_router = TaskRouter(
+        StubParser(
+            TaskRoute(
+                kind=RouteKind.DEVICE_AD_BINDING,
+                original_command="put that campaign on screen 10086",
+                agent_key="device_ad_agent",
+                workflow_key="device_ad_binding",
+                target_device_no="10086",
+                requested_ads=[AdvertisementRequest(name="May promo video", ad_type=AdvertisementType.VIDEO)],
+            )
+        )
+    )
+    client = TestClient(create_app(services=services))
+
+    created = client.post("/tasks", json={"command": "put that campaign on screen 10086"})
+
+    assert created.status_code == 200
+    body = created.json()
+    assert body["task"]["status"] == "awaiting_save_approval"
+    assert body["task"]["requested_ads"][0]["name"] == "May promo video"
 
 
 def test_task_api_gets_status_and_events():

@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol
 
+from backend.app.workflows.state import AdvertisementRequest
+
 
 class RouteKind(StrEnum):
     DEVICE_AD_BINDING = "device_ad_binding"
@@ -23,6 +25,7 @@ class TaskRoute:
     company_query: str | None = None
     tag_query: str | None = None
     upload_asset_queries: list[str] = field(default_factory=list)
+    requested_ads: list[AdvertisementRequest] = field(default_factory=list)
     phases: list[RouteKind] = field(default_factory=list)
     missing_fields: list[str] = field(default_factory=list)
     clarification_reason: str | None = None
@@ -153,5 +156,8 @@ class TaskRouter:
     def __init__(self, parser: CommandParser | None = None) -> None:
         self._parser = parser or DeterministicCommandParser()
 
-    def route(self, command: str) -> TaskRoute:
+    def parse(self, command: str) -> TaskRoute:
         return self._parser.parse(command)
+
+    def route(self, command: str) -> TaskRoute:
+        return self.parse(command)

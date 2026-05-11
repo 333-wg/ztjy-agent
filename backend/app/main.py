@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -11,7 +12,18 @@ def create_app(
     asset_base_dirs: list[str | Path] | None = None,
     services: ApiServices | None = None,
 ) -> FastAPI:
-    app = FastAPI(title=settings.app_name)
-    app.state.services = services or create_mock_services(asset_base_dirs=asset_base_dirs)
+    resolved_services = services or create_mock_services(asset_base_dirs=asset_base_dirs)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        app.state.services = resolved_services
+        yield
+        close = getattr(app.state.services, "close", None)
+        if close is not None:
+            close()
+
+    app = FastAPI(title=settings.app_name, lifespan=lifespan)
+    app.state.services = resolved_services
     app.include_router(router)
+
     return app
