@@ -39,6 +39,8 @@ class TaskRepository(Protocol):
 
     def update_task_status(self, task_id: str, status: TaskStatus) -> AgentTask: ...
 
+    def update_task(self, task_id: str, **changes: Any) -> AgentTask: ...
+
 
 class ApprovalRepository(Protocol):
     def create_approval(
@@ -142,6 +144,15 @@ class InMemoryTaskRepository:
         task.status = status
         task.updated_at = utc_now()
         if status in {TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.CANCELLED}:
+            task.completed_at = task.updated_at
+        return _copy(task)
+
+    def update_task(self, task_id: str, **changes: Any) -> AgentTask:
+        task = self._tasks[task_id]
+        for key, value in changes.items():
+            setattr(task, key, _copy(value))
+        task.updated_at = utc_now()
+        if task.status in {TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.CANCELLED}:
             task.completed_at = task.updated_at
         return _copy(task)
 
